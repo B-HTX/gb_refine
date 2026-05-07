@@ -78,10 +78,7 @@ a_{ij}=
 然后用邻居的候选标签置信度来修正当前样本：
 
 [
-\tilde{Y}_{i}
-=============
-
-\sum_{j\in \mathcal{N}*k(i)}
+\tilde{Y}_{i}=\sum_{j\in \mathcal{N}*k(i)}
 a*{ij}Y^{(0)}_j
 ]
 
@@ -138,10 +135,7 @@ row = (1 - opts.alpha_knn) * Y0(i, :) + opts.alpha_knn * neigh;
 公式是：
 
 [
-Y^{conf}_i
-==========
-
-(1-\alpha)Y^{(0)}_i+\alpha \tilde{Y}_i
+Y^{conf}_i=(1-\alpha)Y^{(0)}_i+\alpha \tilde{Y}_i
 ]
 
 默认：
@@ -179,10 +173,7 @@ Y^{(0)}_i=[0.5,0.5]
 如果 (\alpha=0.6)，那么：
 
 [
-Y^{conf}_i
-==========
-
-0.4[0.5,0.5]+0.6[0.85,0.15]
+Y^{conf}_i=0.4[0.5,0.5]+0.6[0.85,0.15]
 ]
 
 [
@@ -215,11 +206,11 @@ A 更像真标签，但 B 仍然保留一定可能性
 
    
 
-3. **近邻粒球不要取 `lambda * m_i` 那么多**
+2. **近邻粒球不要取 `lambda * m_i` 那么多**
    当前如果某类粒球很多，取 30% 可能太多，会把局部结构平均掉。改成
    `ceil(lambda * sqrt(m_i))`，并限制在 3 到 10 个附近。
 
-4. **每个候选标签只取自己的 label-specific score**
+3. **每个候选标签只取自己的 label-specific score**
    原代码对每个候选标签都累加完整的 q 维粒球标签向量，容易产生“交叉标签泄漏”。我改成：标签 `lab` 的粒球只给 `score(j, lab)` 提供证据。
 
 这一点是我觉得最关键的结构性修改。
@@ -295,10 +286,7 @@ d_{ilb}=|x_i-c_{lb}|^2
 然后用高斯核距离权重：
 
 [
-\rho_{ilb}
-==========
-
-\frac{
+\rho_{ilb}=\frac{
 \exp\left(-\frac{d_{ilb}}{2\sigma_i^2+\varepsilon}\right)
 }{
 \sum_{t\in \mathcal{B}*l(i)}
@@ -315,10 +303,7 @@ d_{ilb}=|x_i-c_{lb}|^2
 最后，第 (l) 个标签的分数是：
 
 [
-score_{il}
-==========
-
-\sum_{b\in \mathcal{B}*l(i)}
+score_{il}=\sum_{b\in \mathcal{B}*l(i)}
 \rho*{ilb}g_{lb,l}
 ]
 
@@ -348,10 +333,7 @@ base = base * rel;
 公式是：
 
 [
-rel_{il}
-========
-
-\exp
+rel_{il}=\exp
 \left(
 -\frac{\min_b d_{ilb}}
 {2\cdot \text{median}*b(d*{ilb})+\varepsilon}
@@ -398,17 +380,11 @@ h_C=[0.70,0.10,0.20]
 原代码会把三个完整向量加起来：
 
 [
-h_{sum}
-=======
-
-h_A+h_B+h_C
+h_{sum}=h_A+h_B+h_C
 ]
 
 [
-h_{sum}
-=======
-
-[1.45,0.95,0.60]
+h_{sum}=[1.45,0.95,0.60]
 ]
 
 归一化后 A 很容易赢。
@@ -462,7 +438,7 @@ B 会略微领先。
 
    
 
-6. **去掉二次规划，改成距离核加权 + 行归一化 + 轻微 sharpening**
+4. **去掉二次规划，改成距离核加权 + 行归一化 + 轻微 sharpening**
    更简单、更快，也更适合初始化。原粒球生成函数可以继续用，不需要大改。
 
 ### 原来的最终优化
@@ -520,10 +496,7 @@ score_{il}=0,\quad l\notin S_i
 然后候选标签内归一化：
 
 [
-z_{il}
-======
-
-\frac{score_{il}}
+z_{il}=\frac{score_{il}}
 {\sum_{r\in S_i}score_{ir}}
 ]
 
@@ -546,10 +519,7 @@ row = (1 - opts.knn_blend_final) * row + opts.knn_blend_final * Y_conf(i, :);
 公式是：
 
 [
-\hat{f}_i
-=========
-
-(1-\gamma)z_i+\gamma Y_i^{conf}
+\hat{f}_i=(1-\gamma)z_i+\gamma Y_i^{conf}
 ]
 
 默认：
@@ -578,10 +548,7 @@ row = row / sum(row);
 公式是：
 
 [
-F_{il}
-======
-
-\frac{
+F_{il}=\frac{
 \hat{f}*{il}^{\tau}
 }{
 \sum*{r\in S_i}\hat{f}_{ir}^{\tau}
@@ -659,69 +626,6 @@ F_i=[0.778,0.222]
 ]
 
 这对 `argmax` 型准确率有利。
-
----
-
-## 三个修改连起来看
-
-整体流程可以理解成：
-
-[
-Y^{(0)}
-\rightarrow
-Y^{conf}
-\rightarrow
-score
-\rightarrow
-Outputs
-]
-
-分别对应：
-
-1. **kNN 平滑：**
-
-[
-Y^{conf}_i=(1-\alpha)Y^{(0)}_i+\alpha \tilde{Y}_i
-]
-
-作用：
-让候选标签初值不再完全均匀。
-
-2. **标签专属粒球打分：**
-
-[
-score_{il}
-==========
-
-\sum_{b\in \mathcal{B}*l(i)}
-\rho*{ilb}g_{lb,l}
-]
-
-作用：
-判断第 (l) 个候选标签时，只给第 (l) 个标签打分，减少交叉标签泄漏。
-
-3. **最终融合和锐化：**
-
-[
-\hat{f}_i=(1-\gamma)z_i+\gamma Y_i^{conf}
-]
-
-[
-F_{il}
-======
-
-\frac{
-\hat{f}*{il}^{\tau}
-}{
-\sum*{r\in S_i}\hat{f}_{ir}^{\tau}
-}
-]
-
-作用：
-保留稳定性，同时让最大标签更清楚。
-
----
-
 
 
 
