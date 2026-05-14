@@ -1,0 +1,444 @@
+代码的核心逻辑是：**先按候选标签分别生成粒度球，再利用粒度球中心及球内样本标签分布构造局部标签向量，最后通过二次规划得到满足偏标记约束的初始标签置信度矩阵**。
+代码中主要实现文件为 `build_label_manifold_gb.m`，粒度球生成由 `generate_granular_balls_mgnr.m` 完成，最终分类精度通过最大置信度标签与真实标签比较得到。  
+
+---
+
+## 基于粒度球的初始标签置信度矩阵构建过程
+
+设偏标记学习训练集为
+
+[
+\mathcal{D}={(\boldsymbol{x}*i,S_i)}*{i=1}^{p},
+]
+
+其中，(\boldsymbol{x}_i\in \mathbb{R}^{d}) 表示第 (i) 个样本，(S_i\subseteq \mathcal{Y}={1,2,\ldots,q}) 表示其候选标签集合，(p) 为样本数，(q) 为类别数。对应的候选标签矩阵记为
+
+[
+\boldsymbol{Y}=[y_{ij}]_{p\times q},
+]
+
+其中
+
+[
+y_{ij}=
+\begin{cases}
+1, & j\in S_i,\
+0, & j\notin S_i.
+\end{cases}
+]
+
+为了消除不同候选标签集合大小对初始标签权重的影响，首先对候选标签矩阵进行行归一化，得到样本的初始候选标签分布：
+
+[
+\widetilde{y}*{ij}=\frac{y*{ij}}{\sum_{r=1}^{q}y_{ir}}.
+]
+
+同时，对样本特征进行 (L_2) 归一化：
+
+[
+\widetilde{\boldsymbol{x}}_i=
+\frac{\boldsymbol{x}_i}{|\boldsymbol{x}_i|_2}.
+]
+
+后续计算均基于归一化后的样本特征进行。
+
+---
+
+## 1. 按候选标签生成粒度球
+
+对于每一个标签 (l\in \mathcal{Y})，选取所有将标签 (l) 作为候选标签的样本：
+
+[
+\mathcal{X}^{(l)}={\widetilde{\boldsymbol{x}}*i\mid y*{il}=1}.
+]
+
+然后在 (\mathcal{X}^{(l)}) 上生成一组粒度球：
+
+[
+\mathcal{B}^{(l)}={B^{(l)}_1,B^{(l)}*2,\ldots,B^{(l)}*{m_l}},
+]
+
+其中 (m_l) 表示标签 (l) 对应的粒度球数量。
+
+对任意粒度球 (B)，其中心定义为
+
+[
+\boldsymbol{c}*B=\frac{1}{|B|}\sum*{\boldsymbol{x}_i\in B}\widetilde{\boldsymbol{x}}_i.
+]
+
+粒度球的分布度量 (DM(B)) 定义为球内样本到球心的平均距离：
+
+[
+DM(B)=\frac{1}{|B|}\sum_{\boldsymbol{x}_i\in B}
+\left|\widetilde{\boldsymbol{x}}_i-\boldsymbol{c}_B\right|_2.
+]
+
+在粒度球划分过程中，首先选择距离当前球心最远的样本作为第一个分裂中心：
+
+[
+\boldsymbol{x}*a=
+\arg\max*{\boldsymbol{x}_i\in B}
+\left|\widetilde{\boldsymbol{x}}_i-\boldsymbol{c}_B\right|_2^2.
+]
+
+然后选择距离 (\boldsymbol{x}_a) 最远的样本作为第二个分裂中心：
+
+[
+\boldsymbol{x}*b=
+\arg\max*{\boldsymbol{x}_i\in B}
+\left|\widetilde{\boldsymbol{x}}_i-\boldsymbol{x}_a\right|_2^2.
+]
+
+对于球内任一样本 (\widetilde{\boldsymbol{x}}_i)，根据其与两个分裂中心的距离将其分配到两个子球中：
+
+[
+\widetilde{\boldsymbol{x}}_i\in B_1
+\quad \text{if} \quad
+\left|\widetilde{\boldsymbol{x}}_i-\boldsymbol{x}_a\right|_2^2
+<
+\left|\widetilde{\boldsymbol{x}}_i-\boldsymbol{x}_b\right|_2^2,
+]
+
+否则将其划分到 (B_2)。
+
+划分后，计算两个子球的加权分布度量：
+
+[
+DM_{\text{child}}
+=================
+
+\frac{|B_1|}{|B_1|+|B_2|}DM(B_1)
++
+\frac{|B_2|}{|B_1|+|B_2|}DM(B_2).
+]
+
+若满足
+
+[
+DM_{\text{child}}<DM(B),
+]
+
+则接受本次划分；否则保留原粒度球。该过程不断迭代，直到粒度球数量不再变化，或球内样本数小于设定阈值 `min_samples_to_split`。
+
+---
+
+## 2. 构造粒度球的标签分布向量
+
+对于标签 (l) 下的第 (b) 个粒度球 (B^{(l)}_b)，其中心为
+
+[
+\boldsymbol{c}^{(l)}_b
+======================
+
+\frac{1}{|B^{(l)}*b|}
+\sum*{\boldsymbol{x}_i\in B^{(l)}_b}
+\widetilde{\boldsymbol{x}}_i.
+]
+
+为了刻画该粒度球内部样本的标签分布，代码并不是简单地对球内样本标签取平均，而是按照样本距离球心的远近进行加权。设粒度球 (B^{(l)}_b) 中共有 (n_b) 个样本，将球内样本按照到球心的距离从近到远排序：
+
+[
+\left|\widetilde{\boldsymbol{x}}_{i_1}-\boldsymbol{c}^{(l)}_b\right|*2
+\leq
+\left|\widetilde{\boldsymbol{x}}*{i_2}-\boldsymbol{c}^{(l)}*b\right|*2
+\leq
+\cdots
+\leq
+\left|\widetilde{\boldsymbol{x}}*{i*{n_b}}-\boldsymbol{c}^{(l)}_b\right|_2.
+]
+
+距离球心越近的样本被赋予越大的权重：
+
+[
+\omega_t=n_b-t+1,\quad t=1,2,\ldots,n_b.
+]
+
+于是，该粒度球的标签分布向量定义为
+
+[
+\boldsymbol{g}^{(l)}_b
+======================
+
+\frac{
+\sum_{t=1}^{n_b}\omega_t \widetilde{\boldsymbol{y}}*{i_t}
+}{
+\sum*{t=1}^{n_b}\omega_t
+},
+]
+
+其中 (\widetilde{\boldsymbol{y}}*{i_t}\in \mathbb{R}^{q}) 表示样本 (\boldsymbol{x}*{i_t}) 的归一化候选标签向量。
+
+这里需要注意：你的代码中权重使用的是**当前粒度球内样本数 (n_b)**，而不是标签 (l) 下的粒度球数量 (m_l)。这样更合理，因为权重排序发生在同一个粒度球内部。如果使用 (m_l)，当球内样本数大于粒度球数量时，可能出现不合理的负权重。
+
+---
+
+## 3. 基于近邻粒度球重构样本
+
+对于样本 (\boldsymbol{x}_i) 及其某一候选标签 (l\in S_i)，先在标签 (l) 对应的粒度球集合中选取距离样本最近的若干个粒度球。设标签 (l) 下共有 (m_l) 个粒度球，则选取数量为
+
+[
+s_l=\max\left(1,\min\left(m_l,\left\lceil \lambda m_l\right\rceil\right)\right),
+]
+
+其中 (\lambda\in(0,1]) 是近邻粒度球比例参数，代码默认取 (\lambda=0.3)。
+
+样本 (\boldsymbol{x}_i) 到标签 (l) 下第 (b) 个粒度球中心的距离为
+
+[
+d_{ib}^{(l)}
+============
+
+\left|
+\widetilde{\boldsymbol{x}}_i-\boldsymbol{c}^{(l)}_b
+\right|_2^2.
+]
+
+选择距离最小的 (s_l) 个粒度球，构成近邻粒度球集合：
+
+[
+\mathcal{N}_{i}^{(l)}
+=====================
+
+\operatorname{Top}_{s_l}
+\left(
+-\left|
+\widetilde{\boldsymbol{x}}_i-\boldsymbol{c}^{(l)}_b
+\right|_2^2
+\right).
+]
+
+然后利用这些近邻粒度球中心对样本 (\boldsymbol{x}_i) 进行凸重构。重构权重通过如下二次规划获得：
+
+[
+\min_{\boldsymbol{w}_{i}^{(l)}}
+\left|
+\widetilde{\boldsymbol{x}}_i
+----------------------------
+
+\sum_{b\in \mathcal{N}*{i}^{(l)}}
+w*{ib}^{(l)}\boldsymbol{c}^{(l)}_b
+\right|_2^2,
+]
+
+约束条件为
+
+[
+\sum_{b\in \mathcal{N}*{i}^{(l)}}w*{ib}^{(l)}=1,
+\quad
+w_{ib}^{(l)}\geq 0.
+]
+
+该约束保证样本由近邻粒度球中心的凸组合进行表示，避免出现不稳定的负权重。
+
+---
+
+## 4. 生成样本的局部标签置信度目标
+
+得到重构权重后，将近邻粒度球的标签分布向量按重构权重加权求和，得到样本 (\boldsymbol{x}_i) 在候选标签 (l) 视角下的局部标签置信度目标：
+
+[
+\boldsymbol{h}_{i}^{(l)}
+========================
+
+\sum_{b\in \mathcal{N}*{i}^{(l)}}
+w*{ib}^{(l)}
+\boldsymbol{g}^{(l)}_b.
+]
+
+这里的 (\boldsymbol{h}_{i}^{(l)}\in \mathbb{R}^{q}) 不是单一类别的标量置信度，而是一个 (q) 维标签分布向量。它表示：在标签 (l) 所形成的粒度球结构中，样本 (\boldsymbol{x}_i) 更倾向于哪些标签。
+
+对于样本 (\boldsymbol{x}_i)，其所有候选标签都会产生一个局部标签目标。因此，代码中对这些局部目标进行累加：
+
+[
+\boldsymbol{H}_i
+================
+
+\sum_{l\in S_i}
+\boldsymbol{h}_{i}^{(l)}.
+]
+
+同时记录参与累加的项数：
+
+[
+c_i=|S_i|.
+]
+
+在正常情况下，(c_i) 等于样本 (\boldsymbol{x}_i) 的候选标签数量。
+
+---
+
+## 5. 通过二次规划得到初始标签置信度矩阵
+
+设最终需要学习的初始标签置信度矩阵为
+
+[
+\boldsymbol{F}=[f_{ij}]_{p\times q},
+]
+
+其中 (\boldsymbol{f}_i\in \mathbb{R}^{q}) 表示第 (i) 个样本在所有标签上的初始置信度分布。
+
+为了使 (\boldsymbol{f}_i) 尽可能接近由粒度球得到的多个局部标签目标，构造如下优化问题：
+
+[
+\min_{\boldsymbol{F}}
+\sum_{i=1}^{p}
+\sum_{l\in S_i}
+\left|
+\boldsymbol{f}*i-\boldsymbol{h}*{i}^{(l)}
+\right|_2^2.
+]
+
+展开可得：
+
+[
+\sum_{l\in S_i}
+\left|
+\boldsymbol{f}*i-\boldsymbol{h}*{i}^{(l)}
+\right|_2^2
+===========
+
+## c_i\boldsymbol{f}_i^{T}\boldsymbol{f}_i
+
+2\boldsymbol{H}_i^{T}\boldsymbol{f}_i
++
+\text{const}.
+]
+
+因此，整体目标函数可写为
+
+[
+\min_{\boldsymbol{F}}
+\sum_{i=1}^{p}
+\left(
+c_i\boldsymbol{f}_i^{T}\boldsymbol{f}_i
+---------------------------------------
+
+2\boldsymbol{H}_i^{T}\boldsymbol{f}_i
+\right).
+]
+
+同时，由于偏标记学习中真实标签一定包含在候选标签集合中，因此初始标签置信度需要满足候选标签约束：
+
+[
+f_{ij}=0,\quad j\notin S_i,
+]
+
+[
+0\leq f_{ij}\leq y_{ij},
+]
+
+[
+\sum_{j\in S_i}f_{ij}=1.
+]
+
+于是，最终的优化模型为
+
+[
+\begin{aligned}
+\min_{\boldsymbol{F}} \quad
+&
+\sum_{i=1}^{p}
+\left(
+c_i\boldsymbol{f}_i^{T}\boldsymbol{f}_i
+---------------------------------------
+
+2\boldsymbol{H}*i^{T}\boldsymbol{f}*i
+\right),\
+\text{s.t.}\quad
+&
+0\leq f*{ij}\leq y*{ij},\
+&
+\sum_{j=1}^{q}y_{ij}f_{ij}=1,\quad i=1,2,\ldots,p.
+\end{aligned}
+]
+
+该优化问题的作用是：在保证非候选标签置信度为 0、候选标签置信度和为 1 的前提下，使最终的标签置信度分布尽可能接近粒度球结构给出的局部标签分布。
+
+---
+
+## 6. 向量化二次规划形式
+
+为了调用 MATLAB 中的 `quadprog`，代码将矩阵 (\boldsymbol{F}) 向量化为
+
+[
+\boldsymbol{z}=\operatorname{vec}(\boldsymbol{F}^{T})\in \mathbb{R}^{pq}.
+]
+
+构造块对角矩阵
+
+[
+\boldsymbol{M}_1
+================
+
+\operatorname{diag}
+\left(
+c_1\boldsymbol{I}_q,
+c_2\boldsymbol{I}_q,
+\ldots,
+c_p\boldsymbol{I}_q
+\right),
+]
+
+线性项为
+
+[
+\boldsymbol{\eta}
+=================
+
+\operatorname{vec}
+\left(
+-2\boldsymbol{H}^{T}
+\right).
+]
+
+则二次规划可写为
+
+[
+\min_{\boldsymbol{z}}
+\frac{1}{2}\boldsymbol{z}^{T}
+\boldsymbol{Q}
+\boldsymbol{z}
++
+\boldsymbol{\eta}^{T}\boldsymbol{z},
+]
+
+其中
+
+[
+\boldsymbol{Q}=2\boldsymbol{M}_1.
+]
+
+约束为
+
+[
+\boldsymbol{A}_{eq}\boldsymbol{z}
+=================================
+
+\boldsymbol{1},
+]
+
+以及
+
+[
+\boldsymbol{0}\leq \boldsymbol{z}\leq \operatorname{vec}(\boldsymbol{Y}^{T}).
+]
+
+其中，(\boldsymbol{A}_{eq}) 的第 (i) 行只在样本 (i) 对应的 (q) 个标签位置上取候选标签指示值，即：
+
+[
+\boldsymbol{A}*{eq}(i,(i-1)q+j)=y*{ij}.
+]
+
+求解后，将 (\boldsymbol{z}) 重新变换为矩阵形式：
+
+[
+\boldsymbol{F}
+==============
+
+\operatorname{reshape}(\boldsymbol{z})^{T}.
+]
+
+最终得到的 (\boldsymbol{F}) 即为基于粒度球的初始标签置信度矩阵。
+
+---
+
